@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# 原来是：set -euo pipefail
+# 去掉 -u，避免 .bashrc 里未定义变量导致脚本退出
+set -eo pipefail
 
 # ========================
 # 参数默认值（为空时脚本会报错）
@@ -77,14 +79,21 @@ mkdir -p "$DIR_ROOT" "$DIR_ETC"
 if ! command -v acme.sh >/dev/null 2>&1; then
   echo ">>> 未检测到 acme.sh，正在安装..."
   curl https://get.acme.sh | sh -s email="$ACME_ACCOUNT_EMAIL"
-  . ~/.bashrc || true
 fi
 
-if ! command -v acme.sh >/dev/null 2>&1; then
+# 不管如何，强制把 acme.sh 路径加到 PATH
+if [[ -f "$HOME/.acme.sh/acme.sh" ]]; then
   export PATH="$HOME/.acme.sh:$PATH"
 fi
 
+# 再检查一次，还是找不到就报错退出
+if ! command -v acme.sh >/dev/null 2>&1; then
+  echo "错误：acme.sh 已尝试安装，但仍未找到，请检查 ~/.acme.sh 目录。"
+  exit 1
+fi
+
 # 设置 CA
+echo ">>> 设置默认 CA 为 Let's Encrypt..."
 acme.sh --set-default-ca --server letsencrypt
 
 echo ">>> 正在申请 SSL 证书..."
@@ -105,7 +114,7 @@ unset CF_Token CF_TOKEN
 
 echo
 echo "=============================="
-echo " 证书已成功申请并安装完成！"
+echo "  证书已成功申请并安装完成！"
 echo "=============================="
 echo "路径："
 echo "  /root/cert/$DOMAIN/"
