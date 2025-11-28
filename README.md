@@ -5,5 +5,7 @@ curl -fsSL https://raw.githubusercontent.com/dalaohuuu/acme.sh-let-sencrypt-dns_
 ```
 Usages
 Instead domain and cf_token
+|参数|值|
+|---|---|
 |:-d|:domain:|
 |:-t|:cf_token:|
