@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # 原来是：set -euo pipefail
 # 去掉 -u，避免 .bashrc 里未定义变量导致脚本退出
 set -eo pipefail
