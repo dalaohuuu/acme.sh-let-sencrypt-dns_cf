@@ -2,21 +2,16 @@
 set -e
 
 ########################################
-# 参数：TG_BOT_TOKEN TG_CHAT_ID [HH.MM]
+# Telegram 配置：参数优先，其次环境变量
 ########################################
 TG_BOT_TOKEN="${1:-$TG_BOT_TOKEN}"
 TG_CHAT_ID="${2:-$TG_CHAT_ID}"
-TIME_INPUT="$3"   # 例如 3.6 → 每天 03:06
 
 if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
     echo "用法:"
-    echo "  $0 <TG_BOT_TOKEN> <TG_CHAT_ID> [HH.MM]"
-    echo
-    echo "示例（只执行一次备份）:"
-    echo "  $0 123456:ABCDEF 987654321"
-    echo
-    echo "示例（每天 03:06 自动备份）:"
-    echo "  $0 123456:ABCDEF 987654321 3.6"
+    echo "  $0 <TG_BOT_TOKEN> <TG_CHAT_ID>"
+    echo "或:"
+    echo "  TG_BOT_TOKEN=xxx TG_CHAT_ID=yyy $0"
     exit 1
 fi
 
@@ -27,30 +22,16 @@ notify() {
         -d text="$(hostname) - ${MESSAGE}" >/dev/null
 }
 
+# 失败时通知
 trap 'notify "⚠️ OneDrive 备份失败，请检查 VPS。"' ERR
 
 ########################################
-# 转换 HH.MM → cron (MIN HOUR * * *)
-########################################
-CRON_SCHEDULE=""
-if [ -n "$TIME_INPUT" ]; then
-    HOUR="${TIME_INPUT%%.*}"
-    MIN="${TIME_INPUT##*.}"
-    if [[ "$HOUR" =~ ^[0-9]+$ ]] && [[ "$MIN" =~ ^[0-9]+$ ]]; then
-        CRON_SCHEDULE="$MIN $HOUR * * *"
-    else
-        echo "时间格式错误！正确格式为：HH.MM，例如 3.6 表示 03:06"
-        exit 1
-    fi
-fi
-
-########################################
-# 备份目录配置
+# 备份配置
 ########################################
 REMOTE_NAME="onedrive"
 REMOTE_BASE_DIR="xui_backup"
 
-HOST_ID="$(hostname)"
+HOST_ID="${HOSTNAME:-$(hostname)}"
 HOST_ID_CLEAN=$(echo "$HOST_ID" | tr ' /' '__')
 REMOTE_DIR="${REMOTE_NAME}:${REMOTE_BASE_DIR}/${HOST_ID_CLEAN}"
 TMP_DIR="/tmp/xui_backup_${HOST_ID_CLEAN}"
@@ -63,35 +44,22 @@ CERT_DIR="/root/cert"
 # 执行备份
 ########################################
 rm -rf "$TMP_DIR"
-mkdir -p "$TMP_DIR" "$TMP_DIR/cert"
+mkdir -p "$TMP_DIR"
+mkdir -p "$TMP_DIR/cert"
 
+# 拷贝核心文件
 cp "$DB_FILE" "$TMP_DIR"/
 cp "$CONF_FILE" "$TMP_DIR"/
 
+# 拷贝证书目录（如果存在）
 if [ -d "$CERT_DIR" ]; then
     cp -a "${CERT_DIR}/." "$TMP_DIR/cert/"
 fi
 
+# 同步到 OneDrive
 rclone sync "$TMP_DIR" "$REMOTE_DIR" --create-empty-src-dirs
 
+# 清理临时目录
 rm -rf "$TMP_DIR"
 
 notify "✅ OneDrive 备份完成，备份文件存储于 /xui_backup/$HOST_ID/。"
-
-########################################
-# 写入 crontab（如提供了时间）
-########################################
-if [ -n "$CRON_SCHEDULE" ]; then
-    SCRIPT_PATH="$(readlink -f "$0")"
-    SCRIPT_NAME="$(basename "$SCRIPT_PATH")"
-    LOG_FILE="/var/log/xui_onedrive_backup.log"
-
-    # cron 执行命令
-    CRON_LINE="$CRON_SCHEDULE $SCRIPT_PATH \"$TG_BOT_TOKEN\" \"$TG_CHAT_ID\" >>$LOG_FILE 2>&1"
-
-    # 删除旧任务（无论前面带不带 TG_BOT_TOKEN）
-    NEW_CRON=$( ( crontab -l 2>/dev/null | grep -v "$SCRIPT_NAME" ; echo "$CRON_LINE" ) )
-    echo "$NEW_CRON" | crontab -
-
-    notify "⏰ 自动备份已启用：每天 $TIME_INPUT（cron: $CRON_SCHEDULE）"
-fi
