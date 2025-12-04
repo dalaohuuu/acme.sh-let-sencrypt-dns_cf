@@ -56,23 +56,7 @@ cf_put() {
 }
 
 get_public_ip() {
-    # 1. 尝试从 GCP metadata 读取实例绑定的外网 IP
-    # 只在 GCE 上才会成功，其他环境会超时/失败，自动走到 2
-    local gce_ip
-    gce_ip=$(curl -s --connect-timeout 1 \
-        -H "Metadata-Flavor: Google" \
-        http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip || true)
-
-    if [[ -n "$gce_ip" ]]; then
-        echo "$gce_ip"
-        return 0
-    fi
-
-    # 2. 回退到常规“我从公网看自己”的方式
-    curl -s https://checkip.amazonaws.com \
-      || curl -s https://ipv4.icanhazip.com \
-      || curl -s https://api.ipify.org \
-      || curl -s https://ifconfig.me
+    curl -s https://checkip.amazonaws.com || curl -s https://ipv4.icanhazip.com
 }
 
 
