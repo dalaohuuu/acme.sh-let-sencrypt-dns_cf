@@ -26,7 +26,7 @@ sudo ./cloudflare-ddns.sh install YOUR_Domain YOUR_CF_TOKEN renewtime
 ```
 example：
 三个参数：
-|项目|值|
+|项目|值|说明|
 |:---|:---|:---|
 |Zone|domain.com| |
 |Domain|example.domain.com|域名|
