@@ -1,138 +1,193 @@
 #!/usr/bin/env bash
 #
-# Cloudflare Dynamic DNS Update Script
-# Author: YourName
-# GitHub: https://github.com/yourname/cloudflare-ddns
+# Cloudflare DDNS Script (Smart Zone Detection)
+#
+# Usage:
+#   ./cloudflare-ddns.sh <full_hostname> <api_token> [interval]
+#
+# Example:
+#   ./cloudflare-ddns.sh home.example.com ABCDEF123456 300
+#
+# - Only curl is required.
+# - Zone (root domain) is automatically detected from the hostname.
+# - If the A record doesn't exist, it will be created automatically.
+#
+# Author: dalaohuuu
 # License: MIT
-#
-# This script updates a Cloudflare DNS record to the current public IP.
-# It supports A（IPv4）records.
-#
-# Requirements:
-#   - curl
-#
 
 set -e
 
-echo "=============================="
-echo "  Cloudflare DDNS Updater"
-echo "=============================="
-echo
+HOST="$1"         # full hostname, e.g. home.example.com
+TOKEN="$2"        # Cloudflare API Token
+INTERVAL="${3:-300}"
 
-# -----------------------
-# Get user input
-# -----------------------
-read -rp "Enter your Cloudflare Zone Name (example.com): " CF_ZONE
-read -rp "Enter the Full Hostname to update (home.example.com): " CF_HOST
+if [[ -z "$HOST" || -z "$TOKEN" ]]; then
+    echo "Usage: $0 <full_hostname> <api_token> [interval]"
+    echo "Example: $0 home.example.com ABCDEF123456 300"
+    exit 1
+fi
 
-echo
-echo "You must create a Cloudflare API Token:"
-echo "- Permissions: Zone:DNS:Edit + Zone:Read"
-echo "- Scope: Your Zone"
-echo "Link: https://dash.cloudflare.com/profile/api-tokens"
-echo
+if ! command -v curl >/dev/null 2>&1; then
+    echo "Error: curl is required but not installed."
+    exit 1
+fi
 
-read -rsp "Enter your Cloudflare API Token: " CF_TOKEN
-echo
-read -rp "Check interval seconds (default 300): " INTERVAL
-INTERVAL=${INTERVAL:-300}
+CACHE_FILE="/tmp/cf-ddns-${HOST//[^A-Za-z0-9_.-]/_}.ip"
 
-echo
-echo "----------------------------------------"
-echo "Confirm your settings:"
-echo " Zone:        $CF_ZONE"
-echo " Hostname:    $CF_HOST"
-echo " Interval:    $INTERVAL seconds"
-echo "----------------------------------------"
-read -rp "Proceed? (y/N): " CONFIRM
-[[ "$CONFIRM" =~ ^[Yy]$ ]] || exit 1
+CF_API_BASE="https://api.cloudflare.com/client/v4"
 
-echo
-echo "Starting Cloudflare DDNS updater..."
-echo
+# --------------- Helper: HTTP GET ---------------
+cf_get() {
+    local url="$1"
+    curl -s -X GET \
+        "$url" \
+        -H "Authorization: Bearer ${TOKEN}" \
+        -H "Content-Type: application/json"
+}
 
-# -----------------------
-# Cache File
-# -----------------------
-CACHE_FILE="/tmp/cf-ddns-ip.cache"
+# --------------- Helper: HTTP POST ---------------
+cf_post() {
+    local url="$1"
+    local data="$2"
+    curl -s -X POST \
+        "$url" \
+        -H "Authorization: Bearer ${TOKEN}" \
+        -H "Content-Type: application/json" \
+        --data "$data"
+}
 
-# -----------------------
-# Function: get public IP
-# -----------------------
+# --------------- Helper: HTTP PUT ---------------
+cf_put() {
+    local url="$1"
+    local data="$2"
+    curl -s -X PUT \
+        "$url" \
+        -H "Authorization: Bearer ${TOKEN}" \
+        -H "Content-Type: application/json" \
+        --data "$data"
+}
+
+# --------------- Get public IPv4 ---------------
 get_public_ip() {
     curl -s https://checkip.amazonaws.com || curl -s https://ipv4.icanhazip.com
 }
 
-# -----------------------
-# Function: get Zone ID
-# -----------------------
-get_zone_id() {
-    curl -s -X GET \
-      "https://api.cloudflare.com/client/v4/zones?name=${CF_ZONE}" \
-      -H "Authorization: Bearer ${CF_TOKEN}" \
-      -H "Content-Type: application/json" |
-      grep -oP '"id":"\K[^"]+' | head -1
+# --------------- Detect Zone (root domain) from hostname ---------------
+find_zone() {
+    local full="$1"
+    local IFS='.'
+    read -r -a labels <<< "$full"
+    local n=${#labels[@]}
+
+    # Try from longest suffix: a.b.c.example.com, example.com, etc.
+    for ((i=0; i<=n-2; i++)); do
+        local candidate=""
+        for ((j=i; j<n; j++)); do
+            if [[ -z "$candidate" ]]; then
+                candidate="${labels[j]}"
+            else
+                candidate="${candidate}.${labels[j]}"
+            fi
+        done
+
+        local resp
+        resp=$(cf_get "${CF_API_BASE}/zones?name=${candidate}&status=active")
+
+        if echo "$resp" | grep -q '"success":true' && echo "$resp" | grep -q '"id":"'; then
+            local zid
+            zid=$(echo "$resp" | grep -oP '"id":"\K[^"]+' | head -1)
+            if [[ -n "$zid" ]]; then
+                ZONE_ID="$zid"
+                ZONE_NAME="$candidate"
+                return 0
+            fi
+        fi
+    done
+
+    return 1
 }
 
-# -----------------------
-# Function: get DNS Record ID
-# -----------------------
-get_record_id() {
-    curl -s -X GET \
-      "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records?name=${CF_HOST}" \
-      -H "Authorization: Bearer ${CF_TOKEN}" \
-      -H "Content-Type: application/json" |
-      grep -oP '"id":"\K[^"]+' | head -1
+# --------------- Ensure DNS A record exists, set RECORD_ID ---------------
+ensure_record() {
+    local resp
+    resp=$(cf_get "${CF_API_BASE}/zones/${ZONE_ID}/dns_records?type=A&name=${HOST}")
+
+    if echo "$resp" | grep -q '"success":true' && echo "$resp" | grep -q '"id":"'; then
+        # record exists
+        RECORD_ID=$(echo "$resp" | grep -oP '"id":"\K[^"]+' | head -1)
+        return 0
+    fi
+
+    echo "No existing A record for ${HOST}, creating one..."
+    local ip
+    ip=$(get_public_ip)
+
+    resp=$(cf_post "${CF_API_BASE}/zones/${ZONE_ID}/dns_records" \
+        "{\"type\":\"A\",\"name\":\"${HOST}\",\"content\":\"${ip}\",\"ttl\":1,\"proxied\":false}")
+
+    if echo "$resp" | grep -q '"success":true'; then
+        RECORD_ID=$(echo "$resp" | grep -oP '"id":"\K[^"]+' | head -1)
+        echo "Created A record for ${HOST} with IP ${ip}"
+        return 0
+    else
+        echo "Error creating DNS record:"
+        echo "$resp"
+        return 1
+    fi
 }
 
-# -----------------------
-# Function: update DNS record
-# -----------------------
+# --------------- Update existing A record ---------------
 update_record() {
-    curl -s -X PUT \
-      "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records/${RECORD_ID}" \
-      -H "Authorization: Bearer ${CF_TOKEN}" \
-      -H "Content-Type: application/json" \
-      --data "{\"type\":\"A\",\"name\":\"${CF_HOST}\",\"content\":\"${1}\",\"ttl\":1,\"proxied\":false}"
+    local new_ip="$1"
+    cf_put "${CF_API_BASE}/zones/${ZONE_ID}/dns_records/${RECORD_ID}" \
+        "{\"type\":\"A\",\"name\":\"${HOST}\",\"content\":\"${new_ip}\",\"ttl\":1,\"proxied\":false}"
 }
 
-# -----------------------
-# Main Loop
-# -----------------------
-ZONE_ID=$(get_zone_id)
-if [[ -z "$ZONE_ID" ]]; then
-    echo "ERROR: Unable to fetch Zone ID"
+echo "======================================="
+echo " Cloudflare DDNS (Smart Zone Detection)"
+echo " Hostname : $HOST"
+echo " Interval : $INTERVAL seconds"
+echo "======================================="
+
+# --------------- Detect Zone ---------------
+if ! find_zone "$HOST"; then
+    echo "Error: Could not detect Cloudflare zone for ${HOST}."
+    echo "Make sure the domain is managed by Cloudflare and the API token is correct."
     exit 1
 fi
 
-RECORD_ID=$(get_record_id)
-if [[ -z "$RECORD_ID" ]]; then
-    echo "ERROR: Unable to fetch DNS Record ID"
+echo "Detected Zone: ${ZONE_NAME}"
+echo "Zone ID      : ${ZONE_ID}"
+
+# --------------- Ensure DNS record exists ---------------
+if ! ensure_record; then
+    echo "Error: Unable to create or find A record for ${HOST}."
     exit 1
 fi
 
-echo "Zone ID:   $ZONE_ID"
-echo "Record ID: $RECORD_ID"
+echo "Record ID    : ${RECORD_ID}"
+echo
+echo "DDNS updater started. Press Ctrl + C to stop."
 echo
 
-echo "DDNS is running. Press CTRL+C to stop."
-echo
-
+# --------------- Main loop ---------------
 while true; do
-    NEW_IP=$(get_public_ip)
+    NEW_IP=$(get_public_ip | tr -d ' \n\r')
     OLD_IP=""
 
     [[ -f "$CACHE_FILE" ]] && OLD_IP=$(cat "$CACHE_FILE")
 
-    if [[ "$NEW_IP" != "$OLD_IP" ]]; then
-        echo "$(date '+%F %T') Updating IP: $OLD_IP -> $NEW_IP"
+    if [[ -z "$NEW_IP" ]]; then
+        echo "$(date '+%F %T') Failed to fetch public IP."
+    elif [[ "$NEW_IP" != "$OLD_IP" ]]; then
+        echo "$(date '+%F %T') IP changed: ${OLD_IP:-<none>} -> $NEW_IP"
         RESULT=$(update_record "$NEW_IP")
 
         if echo "$RESULT" | grep -q '"success":true'; then
             echo "$NEW_IP" > "$CACHE_FILE"
-            echo "Update successful!"
+            echo "Update successful."
         else
-            echo "ERROR updating DNS:"
+            echo "Update failed:"
             echo "$RESULT"
         fi
     else
