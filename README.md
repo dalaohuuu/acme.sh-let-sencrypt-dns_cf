@@ -38,8 +38,8 @@ sudo apt update && sudo apt install -y curl && \
 curl -fsSL https://raw.githubusercontent.com/dalaohuuu/vps_tools/main/cloudflare-ddns.sh -o cloudflare-ddns.sh && \
 chmod +x cloudflare-ddns.sh && \
 sudo ./cloudflare-ddns.sh install example.domain.com 1234567890abcdef 300
-# Nginx+Cloudreve+Nginx 配置+acme.sh
-# Cloudreve + Nginx + SSL 一键部署脚本
+
+# 4.Cloudreve + Nginx + SSL 一键部署脚本
 
 本项目提供一个简洁的自动化脚本，用于在 **纯净 Ubuntu 服务器上部署：**
 
