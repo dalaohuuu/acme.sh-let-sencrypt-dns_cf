@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+#set -euo pipefail
 
 ############################################################
 # 一键部署：acme.sh + Nginx + Cloudreve + 面板反代
