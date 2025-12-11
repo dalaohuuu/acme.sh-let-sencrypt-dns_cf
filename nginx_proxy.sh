@@ -141,6 +141,9 @@ server {
     listen $HTTPS_PORT ssl http2 default_server;
     server_name $DOMAIN;
 
+    # 解除上传大小限制（server 级别）
+    client_max_body_size 0;
+
     ssl_certificate     $CERT_DIR/fullchain.pem;
     ssl_certificate_key $CERT_DIR/privkey.pem;
 
@@ -149,13 +152,19 @@ server {
         proxy_pass http://127.0.0.1:5212;
         proxy_http_version 1.1;
 
+        # 解除上传大小限制（location 级别）
+        client_max_body_size 0;
+        # 大文件 / 分片上传推荐关闭缓冲
+        proxy_request_buffering off;
+
         proxy_set_header Host              \$host;
         proxy_set_header X-Real-IP         \$remote_addr;
         proxy_set_header X-Forwarded-For   \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
 
-        proxy_read_timeout 60s;
-        proxy_send_timeout 60s;
+        # 上传可能比较久，给长一点超时时间
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
 }
 EOF
