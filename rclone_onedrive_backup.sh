@@ -1,25 +1,26 @@
 #!/usr/bin/env bash
-# 完全自动安装 rclone + 配置 OneDrive + 每日自动备份
 # 用法：
-#   sudo bash setup_rclone_onedrive_backup.sh '<TOKEN_JSON>' 'HH:MM'
+#   sudo bash rclone_onedrive_backup.sh '<TOKEN_JSON>' '<DRIVE_ID>' 'HH:MM'
 
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
-  echo "请使用 sudo 运行"
+  echo "❌ 请使用 sudo 运行本脚本"
   exit 1
 fi
 
-if [[ $# -ne 2 ]]; then
-  echo "用法: sudo bash $0 '<TOKEN_JSON>' '03:30'"
+if [[ $# -ne 3 ]]; then
+  echo "用法：sudo bash $0 '<TOKEN_JSON>' '<DRIVE_ID>' '03:30'"
   exit 1
 fi
 
 TOKEN_JSON="$1"
-BACKUP_TIME="$2"
+DRIVE_ID="$2"
+BACKUP_TIME="$3"
 
+# 时间检查
 if [[ ! "$BACKUP_TIME" =~ ^([01][0-9]|2[0-3]):([0-5][0-9])$ ]]; then
-  echo "时间格式错误，应为 HH:MM"
+  echo "❌ 时间格式错误，应为 HH:MM 例如 03:30"
   exit 1
 fi
 
@@ -42,13 +43,15 @@ if ! command -v rclone >/dev/null 2>&1; then
 fi
 
 ##############################
-# 写入 rclone 配置（强制覆盖）
+# 写入 rclone 配置（使用 drive_type & drive_id）
 ##############################
 
 cat > "$CONF_FILE" <<EOF
 [$REMOTE_NAME]
 type = onedrive
 token = $TOKEN_JSON
+drive_type = personal
+drive_id = $DRIVE_ID
 EOF
 
 chmod 600 "$CONF_FILE"
@@ -72,7 +75,6 @@ ARCHIVE="${HOST}_${TS}.tar.gz"
 
 mkdir -p "$TMP"
 
-# 备份内容
 FILES=(
   "/etc/nginx"
   "/etc/fail2ban"
@@ -86,7 +88,7 @@ for f in "${FILES[@]}"; do
 done
 
 if [[ ${#EXIST[@]} -eq 0 ]]; then
-  echo "无可备份文件，退出"
+  echo "❌ 无可备份文件"
   exit 1
 fi
 
@@ -95,21 +97,23 @@ tar -czf "${TMP}/${ARCHIVE}" "${EXIST[@]}"
 rclone copy "${TMP}/${ARCHIVE}" "$REMOTE_DIR" --create-empty-src-dirs
 
 rm -rf "$TMP"
-echo "备份完成：$ARCHIVE"
+echo "✅ 备份完成：$ARCHIVE"
 EOF
 
 chmod +x "$BACKUP_SCRIPT"
 
 ##############################
-# 写入 cron（覆盖旧项）
+# 写入 cron
 ##############################
 
 touch "$LOG_FILE"
 chmod 600 "$LOG_FILE"
 
+# 删除旧的 cron
 sed -i "/vps_rclone_backup.sh/d" /etc/crontab
 
+# 添加新任务
 echo "${CRON_M} ${CRON_H} * * * root ${BACKUP_SCRIPT} >> ${LOG_FILE} 2>&1" >> /etc/crontab
 
-echo "部署完成！可执行手动备份："
-echo "  sudo $BACKUP_SCRIPT"
+echo "🎉 完成部署！"
+echo "手动测试备份：sudo $BACKUP_SCRIPT"
