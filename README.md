@@ -80,3 +80,49 @@ curl -fsSL curl -fsSL https://raw.githubusercontent.com/dalaohuuu/vps_tools/refs
   && chmod +x nginx_proxy.sh \
   && ./nginx_proxy.sh Domain CF_Token
 ```
+# 5. force-static-ip.sh
+Set **static IPv4 + IPv6** and **disable automatic IP changes**
+(cloud-init / DHCP / IPv6 RA) on **Ubuntu 20.04 / 24.04**.
+
+> ⚠️ May disconnect SSH. Use console / out-of-band access.
+
+## Run
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dalaohuuu/vps_tools/refs/heads/main/force-static-ip.sh | sudo bash -s -- \
+  --iface ens3 \
+  --ipv4 ip/netmask --gw4 gateway \
+  --ipv6 ip/Prefix Length --gw6 gateway \
+  --dns "dns1,ipv4 dns,ipv6 dns,......" \
+  --yes
+
+```
+## Does
+   - Disable cloud-init network config
+      禁用 cloud-init 的网络配置功能
+      防止云镜像/云平台在重启或初始化时自动修改 IP、网关或 DNS。
+   - Disable DHCP / IPv6 RA / SLAAC
+      关闭 DHCP / IPv6 RA / SLAAC 自动配置
+      防止系统通过 DHCP 或 IPv6 路由通告自动获取或变更 IP 地址。
+   - Write netplan static IPv4 + IPv6
+      写入 netplan 静态 IPv4 + IPv6 配置
+      使用 netplan 明确指定 IPv4 / IPv6 地址、网关和 DNS。
+   - Backup existing configs
+      自动备份现有网络配置
+      在修改前对原有配置文件进行备份，便于回滚恢复。
+## Options
+
+    --keep-networkmanager
+      保留并继续使用 NetworkManager（默认会禁用它以减少自动改 IP 的可能）。
+    --no-cloud-init
+      不修改 cloud-init 的网络配置（默认会禁用 cloud-init 的网络接管）。
+    --dry-run
+      仅展示将要生成的配置内容，不对系统做任何实际修改。
+## Rollback
+      回滚方法（Rollback）
+
+      如果网络异常或需要恢复：
+      ```
+      sudo netplan apply
+      ```
+      必要时可恢复 /etc/netplan/ 目录下的 .bak.* 备份文件后再执行上述命令。
