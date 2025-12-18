@@ -3,17 +3,22 @@
 #
 # Minimal installer for shadowsocks-rust (ssserver):
 # - Downloads ssserver from GitHub releases
-# - Writes config.json (WITHOUT jq/python) using strict input validation
-# - Sets up systemd (autostart)
+# - Writes config(s) WITHOUT jq/python using strict input validation
+# - Creates systemd services and enables autostart
 #
 # No firewall operations. No dependency auto-install.
 #
 # Required:
-#   --port <PORT>
 #   --method <METHOD>
-# And one of:
-#   --password <PASS>
-#   --user <NAME:PASS>   (repeatable)
+#
+# Choose ONE mode:
+#   A) Multi-port (recommended): --entry NAME:PORT:PASS (repeatable, >=1)
+#   B) Single-port: --port <PORT> and --password <PASS>
+#
+# Optional:
+#   --mode tcp_only|tcp_and_udp (default tcp_only)
+#   --timeout <SECONDS> (default 300)
+#   --tag <TAG|latest> (default latest)
 
 set -euo pipefail
 
@@ -21,22 +26,24 @@ SCRIPT_NAME="$(basename "$0")"
 
 BIN_PATH="/usr/local/bin/ssserver"
 CONF_DIR="/etc/shadowsocks-rust"
-CONF_PATH="${CONF_DIR}/config.json"
-UNIT_PATH="/etc/systemd/system/ssserver.service"
+UNIT_DIR="/etc/systemd/system"
 
 SS_USER="shadowsocks"
 SS_GROUP="shadowsocks"
 
 INSTALL_DIR=""
 
-PORT=""
 METHOD=""
-MODE="tcp_only"     # tcp_only | tcp_and_udp
+MODE="tcp_only"
 TIMEOUT="300"
 RELEASE_TAG="latest"
 
+# Single-port (legacy/compatible)
+PORT=""
 SINGLE_PASSWORD=""
-USERS=()            # NAME:PASS
+
+# Multi-port
+ENTRIES=() # NAME:PORT:PASS
 
 DRY_RUN="false"
 
@@ -61,26 +68,30 @@ need_root() {
 usage() {
   cat <<'EOF'
 Usage:
-  sudo ./install-shadowsocks-rust.sh --port 62666 --method chacha20-ietf-poly1305 [options]
+  sudo ./install-shadowsocks-rust.sh --method chacha20-ietf-poly1305 [multi-port entries...] [options]
 
 Required:
-  --port <PORT>                 Listening port
-  --method <METHOD>             Encryption method (e.g. chacha20-ietf-poly1305)
+  --method <METHOD>              Encryption method (e.g. chacha20-ietf-poly1305)
 
-Auth (choose ONE):
-  --password <PASS>             Single user password
-  --user <NAME:PASS>            Multi-user entry (repeatable)
+Choose ONE mode:
+
+A) Multi-port (recommended):
+  --entry <NAME:PORT:PASS>       Repeatable. Each entry becomes one ssserver instance.
+                                 Example: --entry A1:62666:PASS_A1 --entry A2:62667:PASS_A2
+
+B) Single-port:
+  --port <PORT>                  Listening port
+  --password <PASS>              Password
 
 Options:
-  --mode <tcp_only|tcp_and_udp> Default: tcp_only
-  --timeout <SECONDS>           Default: 300
-  --tag <TAG|latest>            Release tag (default: latest)
-  --dry-run                     Print only
-  -h, --help                    Show help
+  --mode <tcp_only|tcp_and_udp>  Default: tcp_only
+  --timeout <SECONDS>            Default: 300
+  --tag <TAG|latest>             Default: latest
+  --dry-run                      Print only
+  -h, --help                     Show help
 
-Notes (IMPORTANT):
-  This minimal version does NOT use jq/python to write JSON.
-  Therefore NAME/PASS/METHOD are validated with strict allowed characters.
+IMPORTANT (minimal JSON writer):
+  Inputs are strictly validated (no jq/python JSON escaping).
 
 Allowed formats:
   NAME   : [A-Za-z0-9_-]{1,32}
@@ -88,45 +99,44 @@ Allowed formats:
   METHOD : [A-Za-z0-9._+-]{3,64}
 
 Examples:
+  # Multi-port (best for "multi A nodes -> B"):
   sudo ./install-shadowsocks-rust.sh \
-    --port 62666 \
     --method chacha20-ietf-poly1305 \
     --mode tcp_only \
-    --user A1:PASS_A1_12345678 \
-    --user A2:PASS_A2_12345678
+    --entry A1:62666:PASS_A1_12345678 \
+    --entry A2:62667:PASS_A2_12345678
+
+  # Single-port:
+  sudo ./install-shadowsocks-rust.sh \
+    --method chacha20-ietf-poly1305 \
+    --port 62666 \
+    --password PASS_A1_12345678
 EOF
 }
+
+re_match() { [[ "$1" =~ $2 ]]; }
 
 # -------- arg parse --------
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --port) PORT="${2:-}"; shift 2;;
     --method) METHOD="${2:-}"; shift 2;;
     --mode) MODE="${2:-}"; shift 2;;
     --timeout) TIMEOUT="${2:-}"; shift 2;;
     --tag) RELEASE_TAG="${2:-}"; shift 2;;
+
+    --entry) ENTRIES+=("${2:-}"); shift 2;;
+
+    --port) PORT="${2:-}"; shift 2;;
     --password) SINGLE_PASSWORD="${2:-}"; shift 2;;
-    --user) USERS+=("${2:-}"); shift 2;;
+
     --dry-run) DRY_RUN="true"; shift 1;;
     -h|--help) usage; exit 0;;
     *) die "Unknown argument: $1 (use --help)";;
   esac
 done
 
-# -------- validation helpers --------
-re_match() {
-  local value="$1"
-  local pattern="$2"
-  [[ "$value" =~ $pattern ]]
-}
-
-validate() {
-  [[ -n "$PORT" ]] || die "--port is required"
-  re_match "$PORT" '^[0-9]+$' || die "--port must be a number"
-  (( PORT >= 1 && PORT <= 65535 )) || die "--port must be in 1..65535"
-
+validate_common() {
   [[ -n "$METHOD" ]] || die "--method is required"
-  # METHOD safe charset for JSON without escaping
   re_match "$METHOD" '^[A-Za-z0-9._+-]{3,64}$' || die "--method contains unsupported characters"
 
   case "$MODE" in
@@ -135,28 +145,44 @@ validate() {
   esac
 
   re_match "$TIMEOUT" '^[0-9]+$' || die "--timeout must be a number"
+}
 
-  if [[ -n "$SINGLE_PASSWORD" && ${#USERS[@]} -gt 0 ]]; then
-    die "Use --password OR --user ... (not both)"
-  fi
-  if [[ -z "$SINGLE_PASSWORD" && ${#USERS[@]} -eq 0 ]]; then
-    die "You must specify --password or at least one --user NAME:PASS"
-  fi
+validate_entry() {
+  local entry="$1"
+  # NAME:PORT:PASS
+  # NAME cannot contain ':', PASS cannot contain ':'
+  [[ "$entry" == *:*:* ]] || die "--entry must be NAME:PORT:PASS (got: $entry)"
 
-  # Password validation (safe charset, length)
-  if [[ -n "$SINGLE_PASSWORD" ]]; then
-    re_match "$SINGLE_PASSWORD" '^[A-Za-z0-9._~+=-]{8,128}$' || die "--password must match [A-Za-z0-9._~+=-]{8,128}"
-  fi
+  local name="${entry%%:*}"
+  local rest="${entry#*:}"
+  local port="${rest%%:*}"
+  local pass="${rest#*:}"
 
-  # Multi-user validation
-  if [[ ${#USERS[@]} -gt 0 ]]; then
-    for up in "${USERS[@]}"; do
-      [[ "$up" == *:* ]] || die "--user must be NAME:PASS (got: $up)"
-      local name="${up%%:*}"
-      local pass="${up#*:}"
-      re_match "$name" '^[A-Za-z0-9_-]{1,32}$' || die "User name '$name' must match [A-Za-z0-9_-]{1,32}"
-      re_match "$pass" '^[A-Za-z0-9._~+=-]{8,128}$' || die "Password for '$name' must match [A-Za-z0-9._~+=-]{8,128}"
-    done
+  re_match "$name" '^[A-Za-z0-9_-]{1,32}$' || die "Entry NAME '$name' invalid (allowed: [A-Za-z0-9_-]{1,32})"
+  re_match "$port" '^[0-9]+$' || die "Entry PORT '$port' must be a number"
+  (( port >= 1 && port <= 65535 )) || die "Entry PORT '$port' out of range"
+  re_match "$pass" '^[A-Za-z0-9._~+=-]{8,128}$' || die "Entry PASS for '$name' invalid (allowed: [A-Za-z0-9._~+=-]{8,128})"
+}
+
+validate_single() {
+  [[ -n "$PORT" ]] || die "--port is required for single-port mode"
+  [[ -n "$SINGLE_PASSWORD" ]] || die "--password is required for single-port mode"
+
+  re_match "$PORT" '^[0-9]+$' || die "--port must be a number"
+  (( PORT >= 1 && PORT <= 65535 )) || die "--port out of range"
+  re_match "$SINGLE_PASSWORD" '^[A-Za-z0-9._~+=-]{8,128}$' || die "--password must match [A-Za-z0-9._~+=-]{8,128}"
+}
+
+validate_mode_choice() {
+  # You must choose either multi-port or single-port, not both
+  if [[ ${#ENTRIES[@]} -gt 0 ]]; then
+    if [[ -n "$PORT" || -n "$SINGLE_PASSWORD" ]]; then
+      die "Use either multi-port (--entry ...) OR single-port (--port + --password), not both"
+    fi
+    for e in "${ENTRIES[@]}"; do validate_entry "$e"; done
+  else
+    # no entries -> single-port
+    validate_single
   fi
 }
 
@@ -184,7 +210,6 @@ get_latest_tag() {
 
 install_ssserver() {
   local triple tag tmp base1 base2 url1 url2
-
   triple="$(detect_arch_triple)"
   tag="$RELEASE_TAG"
   [[ "$tag" != "latest" ]] || tag="$(get_latest_tag)"
@@ -227,67 +252,48 @@ create_user_and_dirs() {
   run "chmod 0755 '$CONF_DIR'"
 }
 
-write_config_json_minimal() {
-  log "Writing config to $CONF_PATH (minimal JSON writer)"
+write_config_file() {
+  local name="$1"
+  local port="$2"
+  local pass="$3"
+  local conf_path="${CONF_DIR}/${name}.json"
+
+  log "Writing config: ${conf_path}"
 
   if [[ "$DRY_RUN" == "true" ]]; then
-    echo "[dry-run] would write ${CONF_PATH}"
+    echo "[dry-run] would write ${conf_path}"
     return 0
   fi
 
-  umask 022
-
-  if [[ -n "$SINGLE_PASSWORD" ]]; then
-    cat > "$CONF_PATH" <<EOF
+  cat > "$conf_path" <<EOF
 {
   "server": "0.0.0.0",
-  "server_port": ${PORT},
+  "server_port": ${port},
   "method": "${METHOD}",
   "mode": "${MODE}",
   "timeout": ${TIMEOUT},
-  "password": "${SINGLE_PASSWORD}",
+  "password": "${pass}",
   "log": { "level": "warn" }
 }
 EOF
-  else
-    {
-      echo "{"
-      echo "  \"server\": \"0.0.0.0\","
-      echo "  \"server_port\": ${PORT},"
-      echo "  \"method\": \"${METHOD}\","
-      echo "  \"mode\": \"${MODE}\","
-      echo "  \"timeout\": ${TIMEOUT},"
-      echo "  \"users\": ["
-      local i=0
-      local n="${#USERS[@]}"
-      for up in "${USERS[@]}"; do
-        i=$((i+1))
-        local name="${up%%:*}"
-        local pass="${up#*:}"
-        if [[ $i -lt $n ]]; then
-          echo "    { \"name\": \"${name}\", \"password\": \"${pass}\" },"
-        else
-          echo "    { \"name\": \"${name}\", \"password\": \"${pass}\" }"
-        fi
-      done
-      echo "  ],"
-      echo "  \"log\": { \"level\": \"warn\" }"
-      echo "}"
-    } > "$CONF_PATH"
-  fi
 
-  chmod 0644 "$CONF_PATH"
+  chmod 0644 "$conf_path"
 }
 
-write_systemd_unit() {
-  log "Writing systemd unit to $UNIT_PATH"
+write_unit_file() {
+  local name="$1"
+  local conf_path="${CONF_DIR}/${name}.json"
+  local unit_name="ssserver-${name}.service"
+  local unit_path="${UNIT_DIR}/${unit_name}"
+
+  log "Writing systemd unit: ${unit_name}"
 
   local tmp
   tmp="$(mktemp)"
 
   cat > "$tmp" <<EOF
 [Unit]
-Description=Shadowsocks Rust Server (ssserver)
+Description=Shadowsocks Rust Server (${name})
 After=network-online.target
 Wants=network-online.target
 
@@ -295,7 +301,7 @@ Wants=network-online.target
 Type=simple
 User=${SS_USER}
 Group=${SS_GROUP}
-ExecStart=${BIN_PATH} -c ${CONF_PATH}
+ExecStart=${BIN_PATH} -c ${conf_path}
 Restart=on-failure
 RestartSec=2
 LimitNOFILE=1048576
@@ -308,11 +314,15 @@ ProtectHome=true
 WantedBy=multi-user.target
 EOF
 
-  run "install -m 0644 '$tmp' '$UNIT_PATH'"
+  run "install -m 0644 '$tmp' '$unit_path'"
   run "rm -f '$tmp'"
+}
 
+enable_start_unit() {
+  local name="$1"
+  local unit="ssserver-${name}.service"
   run "systemctl daemon-reload"
-  run "systemctl enable --now ssserver"
+  run "systemctl enable --now '${unit}'"
 }
 
 cleanup() {
@@ -326,28 +336,49 @@ print_summary() {
   echo
   log "Done."
   echo "  binary : ${BIN_PATH}"
-  echo "  config : ${CONF_PATH}"
-  echo "  systemd: ssserver (enabled)"
-  echo "  port   : ${PORT}"
+  echo "  config : ${CONF_DIR}/"
   echo "  method : ${METHOD}"
   echo "  mode   : ${MODE}"
   echo
   echo "Commands:"
-  echo "  systemctl status ssserver --no-pager"
-  echo "  journalctl -u ssserver -f"
-  echo "  ss -lntup | grep ${PORT} || true"
+  if [[ ${#ENTRIES[@]} -gt 0 ]]; then
+    echo "  systemctl list-units 'ssserver-*' --no-pager"
+    echo "  journalctl -u 'ssserver-*' -f"
+  else
+    # single-port mode uses name=PORT for consistency
+    echo "  systemctl status ssserver-${PORT} --no-pager"
+    echo "  journalctl -u ssserver-${PORT} -f"
+  fi
 }
 
 main() {
   need_root
-  validate
+  validate_common
+  validate_mode_choice
   ensure_deps
 
   log "Starting install (dry-run=${DRY_RUN})"
   install_ssserver
   create_user_and_dirs
-  write_config_json_minimal
-  write_systemd_unit
+
+  if [[ ${#ENTRIES[@]} -gt 0 ]]; then
+    for entry in "${ENTRIES[@]}"; do
+      local name="${entry%%:*}"
+      local rest="${entry#*:}"
+      local port="${rest%%:*}"
+      local pass="${rest#*:}"
+      write_config_file "$name" "$port" "$pass"
+      write_unit_file "$name"
+      enable_start_unit "$name"
+    done
+  else
+    # single-port mode: name by port for consistent unit naming
+    local name="${PORT}"
+    write_config_file "$name" "$PORT" "$SINGLE_PASSWORD"
+    write_unit_file "$name"
+    enable_start_unit "$name"
+  fi
+
   print_summary
 }
 
