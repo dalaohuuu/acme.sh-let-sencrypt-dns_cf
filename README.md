@@ -164,7 +164,16 @@ curl -fsSL https://raw.githubusercontent.com/dalaohuuu/vps_tools/refs/heads/main
 - 无空格、无引号、无特殊转义字符
 - 适合纯 shell 写 JSON
 如果不满足格式，脚本会直接报错退出。
-
+### 6.3.1生成密码
+- 标准方式 
+  ```
+  # 生成 16 字节 hex（只含 0-9a-f）
+  openssl rand -hex 16
+  ```
+- 包含更多字符
+  ```
+  openssl rand -base64 12 | tr -d '\n'
+  ```
 ## 6.4 依赖要求
 脚本不会自动安装依赖，请自行确保存在：
 - curl tar xz（用于解压 .tar.xz，没有可能会解压失败）
