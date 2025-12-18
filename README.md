@@ -136,7 +136,7 @@ curl -fsSL https://raw.githubusercontent.com/dalaohuuu/vps_tools/refs/heads/main
   -o install-shadowsocks-rust.sh \
 && chmod +x install-shadowsocks-rust.sh \
 && sudo ./install-shadowsocks-rust.sh \
-  --port 62666 \
+  --port 12345 \
   --method chacha20-ietf-poly1305 \
   --mode tcp_only \
   --user A1:PASS_A1_12345678 \
@@ -161,9 +161,11 @@ curl -fsSL https://raw.githubusercontent.com/dalaohuuu/vps_tools/refs/heads/main
 - NAME：[A-Za-z0-9_-]{1,32}
 - PASS：[A-Za-z0-9._~+=-]{8,128}
 - METHOD：[A-Za-z0-9._+-]{3,64}
+- 无空格、无引号、无特殊转义字符
+- 适合纯 shell 写 JSON
 如果不满足格式，脚本会直接报错退出。
-## 6.4 依赖要求
 
+## 6.4 依赖要求
 脚本不会自动安装依赖，请自行确保存在：
 - curl tar xz（用于解压 .tar.xz，没有可能会解压失败）
 ## 6.5 服务管理
