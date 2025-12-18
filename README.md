@@ -124,104 +124,59 @@ curl -fsSL https://raw.githubusercontent.com/dalaohuuu/vps_tools/refs/heads/main
       sudo netplan apply
       ```
       必要时可恢复 /etc/netplan/ 目录下的 .bak.* 备份文件后再执行上述命令。
-
-# 6. install-shadowsocks-rust.sh
-一键使用：
-```
-curl -fsSL https://raw.githubusercontent.com/dalaohuuu/vps_tools/refs/heads/main/install-shadowsocks-rust.sh -o install-shadowsrocks-rust.sh \
-  && chmod +x install-shadowsrocks-rust.sh \
-  && sudo ./install-shadowsrocks-rust.sh \
-    --port 使用的端口 \
-    --method chacha20-ietf-poly1305 \
-    --mode tcp_only \
-    --user A1:PASS_A1 \
-    --user A2:PASS_A2 \
-    --user A3:PASS_A3 \
-    --allow-ip A1_IP \
-    --allow-ip A2_IP \
-    --allow-ip A3_IP \
-    --install-deps --install-jq \
-  && sudo systemctl status ssserver --no-pager \
-  && sudo ufw status numbered
-```
-## 6.1参数总览
-
-|参数	|是否必需	|默认值	|说明	|备注 / 建议|
-|---------|---------|----------|-----------|----------------|
-|--port <PORT>|	✅ 必需|	无	|ssserver 监听端口|	你的场景用 62666|
-|--method <METHOD>	|❌	|chacha20-ietf-poly1305	|Shadowsocks 加密方式|	同一端口只能一种 method|
-|--mode <MODE>	|❌	|tcp_only	|传输模式：tcp_only 或 tcp_and_udp	|推荐 tcp_only（UDP 给 Hysteria2）|
-|--timeout <SECONDS>|	❌	|300	|连接超时（秒）|	一般不用改|
-## 6.2用户 / 认证相关参数（重点）
-|参数|	是否必需|	默认值|	说明|	备注 / 建议|
-|---------|---------|----------|-----------|----------------|
-|--password <PASS>|	二选一	|无	|单用户密码	|适合只有 1 台入口 VPS|
-|--user <NAME:PASS>|	二选一|	无|	多用户（可重复）|	推荐：每台 A 一个密码|
-|（规则）|	—|	—|	--password 与 --user 不能同时使用	|脚本会强制校验|
-
-📌 说明
-
-  - 在 Shadowsocks 中：密码 = 用户身份
-
-  - NAME 仅用于备注，不参与认证
-
-  - 多入口（A1/A2/A3…）强烈推荐使用 --user
-
-## 6.3防火墙（UFW）相关参数（非常实用）
-|参数|	是否必需|	默认值|	说明|	备注 / 建议|
-|---------|---------|----------|-----------|----------------|
-|--allow-ip <IP/CIDR>|	❌|	无|	只允许指定 IP 访问 SS 端口|	强烈推荐，可多次使用|
-|--open-public|	❌|	false|	对公网开放 SS 端口|	❌ 不推荐|
-|--no-ufw-enable|	❌|	启用|	不自动 enable| / reload UFW|	适合你已有复杂规则时|
-
-📌 UFW 行为说明
-
-默认会：
-
-确保 22/tcp 不被锁
-
-为 SS 端口写 allow / deny 规则
-## 6.4依赖管理（apt / yum / dnf）
-|参数|	是否必需|	默认值|	说明|	备注 / 建议|
-|---------|---------|----------|-----------|----------------|
-|--install-deps|	❌|	关闭|	自动安装依赖|	新机器 推荐开启|
-|--no-install-deps|	❌|	关闭|	禁止自动装依赖|	默认行为|
-|--install-jq|	❌|	auto|	安装 jq	|推荐，保证 JSON 安全|
-|--no-install-jq|	❌|	auto|	不安装 jq|	会自动降级到 python3|
-
-📌 依赖说明
-
-必需：curl、tar、xz
-
-JSON 写入优先级：
-
-jq（最佳）
-
-python3
-
-纯 shell（仅限简单密码）
-## 6.5发布 / 版本控制相关
-|参数|	是否必需|	默认值|	说明|	备注|
-|---------|---------|----------|-----------|----------------|
-|--tag <TAG>|	❌|	latest|	shadowsocks-rust 版本|	可指定如 v1.17.1|
-## 6.6其他辅助参数
-|参数|	是否必需|	默认值|	说明|	备注|
-|---------|---------|----------|-----------|----------------|
-|--dry-run|	❌|	关闭|	只打印不执行|	调试 / CI 很有用|
-|-h, --help|	❌|	—|	显示帮助|	—|
-## 6.7脚本内部关键变量
-| 变量            | 默认值                                    | 说明             |
-| ------------- | -------------------------------------- | -------------- |
-| `BIN_PATH`    | `/usr/local/bin/ssserver`              | ssserver 二进制位置 |
-| `CONF_PATH`   | `/etc/shadowsocks-rust/config.json`    | 配置文件           |
-| `UNIT_PATH`   | `/etc/systemd/system/ssserver.service` | systemd 服务     |
-| `SS_USER`     | `shadowsocks`                          | 运行服务的系统用户      |
-| `LimitNOFILE` | `1048576`                              | 最大文件描述符        |
-## 6.8 用法示例
-、README 里可以加的「推荐用法示例」
-## 6.9多入口 A → 单出口 B（推荐）
-sudo ./install-shadowsrocks-rust.sh \
+# 6.install-shadowsocks-rust.sh
+  用于在 VPS 上 一键安装并配置 shadowsocks-rust（ssserver）服务端，支持：
+   - 参数化配置（端口 / 加密 / 用户）
+   - systemd 开机自启
+   - `--port` 和 `--method` 为必传参数
+   - 认证参数必须二选一：`--password` 或 `--user`
+## 6.1 一键使用
+```bash
+curl -fsSL https://raw.githubusercontent.com/dalaohuuu/vps_tools/refs/heads/main/install-shadowsocks-rust.sh \
+  -o install-shadowsocks-rust.sh \
+&& chmod +x install-shadowsocks-rust.sh \
+&& sudo ./install-shadowsocks-rust.sh \
   --port 62666 \
+  --method chacha20-ietf-poly1305 \
+  --mode tcp_only \
+  --user A1:PASS_A1_12345678 \
+  --user A2:PASS_A2_12345678 \
+&& sudo systemctl status ssserver --no-pager
+```
+## 6.2 参数总览
+| 参数                    | 是否必需 | 默认值        | 说明                         |
+| --------------------- | ---- | ---------- | -------------------------- |
+| `--port <PORT>`       | ✅ 必需 | 无          | ssserver 监听端口              |
+| `--method <METHOD>`   | ✅ 必需 | 无          | Shadowsocks 加密方式           |
+| `--password <PASS>`   | 二选一  | 无          | 单用户密码                      |
+| `--user <NAME:PASS>`  | 二选一  | 无          | 多用户（可重复）                   |
+| `--mode <MODE>`       | ❌    | `tcp_only` | `tcp_only` / `tcp_and_udp` |
+| `--timeout <SECONDS>` | ❌    | `300`      | 连接超时（秒）                    |
+| `--tag <TAG>`         | ❌    | `latest`   | shadowsocks-rust 版本        |
+| `--dry-run`           | ❌    | 关闭         | 只打印不执行                     |
+| `-h, --help`          | ❌    | —          | 显示帮助                       |
+
+## 6.3 用户 / 认证相关参数（重点）
+由于本脚本不使用 jq/python 来做 JSON 转义，因此对输入做了严格限制：
+- NAME：[A-Za-z0-9_-]{1,32}
+- PASS：[A-Za-z0-9._~+=-]{8,128}
+- METHOD：[A-Za-z0-9._+-]{3,64}
+如果不满足格式，脚本会直接报错退出。
+## 6.4 依赖要求
+
+脚本不会自动安装依赖，请自行确保存在：
+- curl tar xz（用于解压 .tar.xz，没有可能会解压失败）
+## 6.5 服务管理
+```
+sudo systemctl status ssserver --no-pager
+sudo systemctl restart ssserver
+sudo journalctl -u ssserver -f
+```
+## 6.6 用法示例：多入口 A → 单出口 B（推荐）
+```
+sudo ./install-shadowsocks-rust.sh
+ \
+  --port 12345 \
   --method chacha20-ietf-poly1305 \
   --mode tcp_only \
   --user A1:PASS_A1 \
@@ -229,6 +184,8 @@ sudo ./install-shadowsrocks-rust.sh \
   --allow-ip A1_IP \
   --allow-ip A2_IP \
   --install-deps --install-jq
+```
+
 # License
 ## License
 This project is licensed under the MIT License.
