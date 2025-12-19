@@ -141,9 +141,9 @@ curl -fsSL https://raw.githubusercontent.com/dalaohuuu/vps_tools/main/install-sh
 && sudo ./install-shadowsocks-rust.sh \
   --method chacha20-ietf-poly1305 \
   --mode tcp_only \
-  --entry 'A1:62666:PASS_A1_12345678' \
-  --entry 'A2:62667:PASS_A2_12345678' \
-  --entry 'A3:62668:PASS_A3_12345678' \
+  --entry 'A1:12345:PASS_A1_12345678' \
+  --entry 'A2:23456:PASS_A2_12345678' \
+  --entry 'A3:34567:PASS_A3_12345678' \
 && systemctl list-units 'ssserver-*' --no-pager
 
 ```
@@ -216,7 +216,7 @@ sudo ./install-shadowsocks-rust.sh --list
 - ```
   sudo ./install-shadowsocks-rust.sh \
   --method chacha20-ietf-poly1305 \
-  --port 62666 \
+  --port 12345 \
   --password 'PASS_A1_12345678'
   ```
 - 安装两条 entry（覆盖重装加 --force）
